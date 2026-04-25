@@ -66,10 +66,18 @@ local function load(plugin_name, all_plugins, loading_stack)
 
 	-- Process dependencies first
 	if plugin.dependencies and type(plugin.dependencies) == "table" then
-		for _, dep_name in ipairs(plugin.dependencies) do
-			if not load(dep_name, all_plugins, loading_stack) then
-				-- If any dependency fails to load, this plugin also fails
-				loading_stack[plugin_name] = nil -- Remove from stack before returning
+		for _, dep_entry in ipairs(plugin.dependencies) do
+			if type(dep_entry) == "table" and dep_entry.name then
+				if not load(dep_entry.name, all_plugins, loading_stack) then
+					loading_stack[plugin_name] = nil
+					return false
+				end
+			else
+				vim.notify(
+					"[loader] Invalid dependency entry for plugin '" .. plugin_name .. "': " .. vim.inspect(dep_entry),
+					vim.log.levels.ERROR
+				)
+				loading_stack[plugin_name] = nil
 				return false
 			end
 		end
@@ -111,13 +119,13 @@ function M.setup()
 	end
 
 	for _, p in ipairs(plugins) do
-		if p.event or p.cmd or p.keys then
+		if p.event or p.cmd or p.keys or p.ft then
 			register(p, plugin_map, loading_stack)
 		end
 	end
 
 	for _, p in ipairs(plugins) do
-		if not (p.event or p.cmd or p.keys) then
+		if not (p.event or p.cmd or p.keys or p.ft) then
 			load(p.name, plugin_map, loading_stack)
 		end
 	end

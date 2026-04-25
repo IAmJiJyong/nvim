@@ -33,7 +33,7 @@ local function normalize_plugin(entry)
 		local deps = {}
 
 		for _, dep in ipairs(plugin.dependencies) do
-			table.insert(deps, url_to_name(dep))
+			table.insert(deps, { url = dep, name = url_to_name(dep) })
 		end
 
 		plugin.dependencies = deps
@@ -78,8 +78,9 @@ local function load_spec_file(module)
 end
 
 function M.get()
-	local results = {}
-	local seen = {}
+	local all_plugin_entries = {} -- Will store all unique {url, name} entries
+	local seen_names = {}
+	local seen_urls = {}
 
 	local plugin_dir = vim.fn.stdpath("config") .. "/lua/plugins"
 
@@ -87,7 +88,7 @@ function M.get()
 	local handle = uv.fs_scandir(plugin_dir)
 
 	if not handle then
-		return results
+		return all_plugin_entries
 	end
 
 	while true do
@@ -98,18 +99,35 @@ function M.get()
 
 		if type == "file" and name:match("%.lua$") then
 			local module = "plugins." .. name:gsub("%.lua$", "")
-			local specs = load_spec_file(module)
+			local specs_from_file = load_spec_file(module) -- Returns a list of normalized plugins
 
-			for _, p in ipairs(specs) do
-				if not seen[p.name] then
-					seen[p.name] = true
-					table.insert(results, p)
+			for _, p in ipairs(specs_from_file) do
+				if not seen_urls[p.url] then
+					seen_urls[p.url] = true
+					seen_names[p.name] = true
+					table.insert(all_plugin_entries, p)
+
+					-- Also process dependencies of this top-level plugin
+					if p.dependencies then
+						for _, dep_entry in ipairs(p.dependencies) do
+							if not seen_urls[dep_entry.url] then
+								seen_urls[dep_entry.url] = true
+								if not seen_names[dep_entry.name] then
+									seen_names[dep_entry.name] = true
+									-- Add the dependency as a separate plugin entry
+									table.insert(all_plugin_entries, { url = dep_entry.url, name = dep_entry.name })
+								end
+							end
+						end
+					end
 				end
 			end
 		end
 	end
 
-	return results
+	-- After collecting all entries, we might need to re-normalize them or ensure they are properly structured.
+	-- For now, this will return a flat list of all unique plugins (main + dependencies).
+	return all_plugin_entries
 end
 
 return M

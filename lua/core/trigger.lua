@@ -62,7 +62,7 @@ function M.ft(plugin, load)
 		pattern = fts,
 		once = true,
 		callback = function()
-			load(plugin)
+			load() -- Call the passed load function (trigger_load_wrapper) without arguments
 		end,
 	})
 end
@@ -90,33 +90,41 @@ function M.keys(plugin, load)
 				local replaced = false
 
 				vim.keymap.set(m, lhs, function()
-					-- ⭐ load once
 					if not state.loaded[plugin.name] then
 						load(plugin)
 					end
 
-					if not replaced then
-						replaced = true
+					-- Prepare opts for the final keymap
+					local final_opts = {
+						desc = key.desc,
+						silent = key.silent ~= false,
+						expr = key.expr,
+						nowait = key.nowait,
+						buffer = key.buffer,
+						remap = key.remap,
+					}
 
-						local opts = {
-							desc = key.desc,
-							silent = key.silent ~= false,
-							expr = key.expr,
-							nowait = key.nowait,
-							buffer = key.buffer,
-							remap = key.remap,
-						}
-
-						-- ⭐ replace keymap
-						vim.keymap.set(m, lhs, rhs, opts)
+					for _, current_mode in ipairs(modes) do
+						pcall(vim.keymap.del, current_mode, lhs)
 					end
 
-					-- ⭐ execute
 					if type(rhs) == "string" then
-						vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(rhs, true, false, true), "m", false)
+						local command_str = rhs:gsub("^:", ""):gsub("<cr>$", ""):gsub("^<Cmd>", "")
+						vim.keymap.set(m, lhs, function()
+							vim.cmd(command_str)
+						end, final_opts)
 					else
-						rhs()
+						vim.keymap.set(m, lhs, rhs, final_opts) -- If rhs is a function, set it directly
 					end
+
+					vim.schedule(function()
+						if type(rhs) == "string" then
+							local command_str = rhs:gsub("^:", ""):gsub("<cr>$", ""):gsub("^<Cmd>", "")
+							vim.cmd(command_str)
+						else
+							rhs()
+						end
+					end)
 				end, {
 					desc = key.desc,
 					silent = true,

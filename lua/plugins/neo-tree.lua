@@ -7,7 +7,7 @@ return {
 			"https://github.com/nvim-tree/nvim-web-devicons",
 		},
 		keys = {
-			{ "<leader>e", ":<Cmd>Neotree<cr>", opts = { desc = "Toggle Neo-tree", silent = true } },
+			{ "<leader>e", ":<Cmd>Neotree toggle<cr>", opts = { desc = "Toggle Neo-tree", silent = true } },
 		},
 	},
 }
