@@ -8,6 +8,8 @@ local M = {}
 -- ╭─────────────────────────────────────────────────────────╮
 -- │ load plugin                                             │
 -- ╰─────────────────────────────────────────────────────────╯
+---@param plugin PluginSpec
+---@return boolean
 local function _load_plugin_actual(plugin)
 	if state.is_loaded(plugin.name) then
 		return true
@@ -27,7 +29,6 @@ local function _load_plugin_actual(plugin)
 
 	if not ok then
 		vim.notify("[loader] failed to setup: " .. plugin.name .. "\n" .. err, vim.log.levels.ERROR)
-		-- print("DEBUG: LUALINE SETUP FAILED for " .. plugin.name .. ": " .. err) -- ADD THIS DEBUG LINE
 		return false
 	end
 
@@ -36,12 +37,14 @@ local function _load_plugin_actual(plugin)
 end
 
 -- New load function to handle dependencies
+---@param plugin_name string
+---@param all_plugins PluginSpec[]
+---@param loading_stack table<string, boolean>
 local function load(plugin_name, all_plugins, loading_stack)
 	if state.is_loaded(plugin_name) then
 		return true
 	end
 
-	-- Detect circular dependencies
 	if loading_stack[plugin_name] then
 		vim.notify(
 			"[loader] Circular dependency detected! Plugin '"
@@ -69,6 +72,13 @@ local function load(plugin_name, all_plugins, loading_stack)
 	if plugin.dependencies and type(plugin.dependencies) == "table" then
 		for _, dep_entry in ipairs(plugin.dependencies) do
 			if type(dep_entry) == "table" and dep_entry.name then
+				vim.notify(
+					"[loader] Start loading dependency entry for plugin '"
+						.. plugin_name
+						.. "': "
+						.. vim.inspect(dep_entry),
+					vim.log.levels.INFO
+				)
 				if not load(dep_entry.name, all_plugins, loading_stack) then
 					loading_stack[plugin_name] = nil
 					return false
@@ -90,14 +100,15 @@ local function load(plugin_name, all_plugins, loading_stack)
 		state.mark_loaded(plugin_name)
 	end
 
-	-- Remove from current loading stack
 	loading_stack[plugin_name] = nil
 
 	return success
 end
 
+---@param plugin PluginSpec
+---@param all_plugins PluginSpec[]
+---@param loading_stack table<string, boolean>
 local function register(plugin, all_plugins, loading_stack)
-	-- The trigger functions will now call the new 'load' function with dependency handling
 	local function trigger_load_wrapper()
 		load(plugin.name, all_plugins, loading_stack)
 	end
@@ -112,12 +123,17 @@ end
 -- ╰─────────────────────────────────────────────────────────╯
 function M.setup()
 	local plugins = specs.get()
-	-- print("DEBUG: Plugins returned by specs.get(): " .. vim.inspect(plugins))
+	print("DEBUG: Plugins returned by specs.get(): " .. vim.inspect(plugins))
 	local plugin_map = {}
 	local loading_stack = {} -- Track plugins currently being processed for circular deps
 
 	for _, p in ipairs(plugins) do
 		plugin_map[p.name] = p
+		if p.dependencies then
+			for _, dep_entry in ipairs(p.dependencies) do
+				plugin_map[dep_entry.name] = dep_entry
+			end
+		end
 	end
 
 	for _, p in ipairs(plugins) do

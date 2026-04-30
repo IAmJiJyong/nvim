@@ -1,5 +1,26 @@
+---@class PluginSpec
+---@field name           string
+---@field url            string
+---@field main           string
+---@field dependencies?  string[]|PluginSpec[]
+---@field lazy?          boolean
+---@field event?         string|string[]
+---@field ft?            string|string[]
+---@field cmd?           string|string[]
+---@field keys?          table[]
+---@field setup          function
+---@field opts?          table|fun(opts:table): table
+
+---@class RawPluginSpec
+---@field [1]?           string    --  url  shorthand
+---@field url?           string
+---@field dependencies?  string[]  --  URL
+---@field opts?          table
+
 local M = {}
 
+---@param url string
+---@return string
 local function url_to_name(url)
 	url = url:gsub("^https://github.com/", "")
 	url = url:gsub("^git@github.com:", "")
@@ -7,6 +28,117 @@ local function url_to_name(url)
 	return url:match(".+/(.+)")
 end
 
+---@param base table
+---@param extra table|fun(opts: table): table?
+local function merge_opts(base, extra)
+	if type(extra) == "function" then
+		local result = extra(base or {})
+		if result then
+			return result
+		end
+		return base
+	end
+
+	if type(extra) == "table" then
+		return vim.tbl_deep_extend("force", base or {}, extra)
+	end
+
+	return base
+end
+
+local function merge_dependencies(a, b)
+	local seen = {}
+	local out = {}
+
+	local function add(list)
+		for _, p in ipairs(list or {}) do
+			if not seen[p.name] then
+				seen[p.name] = true
+				table.insert(out, p)
+			end
+		end
+	end
+
+	add(a)
+	add(b)
+
+	return out
+end
+
+local function list_union(a, b)
+	local seen = {}
+	local out = {}
+
+	local function add(list)
+		for _, v in ipairs(list or {}) do
+			if not seen[v] then
+				seen[v] = true
+				table.insert(out, v)
+			end
+		end
+	end
+
+	add(a)
+	add(b)
+
+	return out
+end
+
+---@param a PluginSpec
+---@param b PluginSpec
+---@return PluginSpec
+local function merge_plugin(a, b)
+	-- opts
+	a.opts = merge_opts(a.opts, b.opts)
+
+	-- list union
+	a.dependencies = merge_dependencies(a.dependencies, b.dependencies)
+	a.event = list_union(a.event, type(b.event) == "table" and b.event or { b.event })
+	a.cmd = list_union(a.cmd, type(b.cmd) == "table" and b.cmd or { b.cmd })
+	a.ft = list_union(a.ft, type(b.ft) == "table" and b.ft or { b.ft })
+	a.keys = list_union(a.keys, b.keys)
+
+	-- override fields
+	if b.setup then
+		a.setup = b.setup
+	end
+	if b.main then
+		a.main = b.main
+	end
+	if b.priority then
+		a.priority = b.priority
+	end
+	if b.lazy ~= nil then
+		a.lazy = b.lazy
+	end
+
+	return a
+end
+
+---@param dep string|PluginSpec
+---@return PluginSpec
+local function normalize_dep(dep)
+	if type(dep) == "string" then
+		return {
+			url = dep,
+			name = url_to_name(dep),
+		}
+	elseif type(dep) == "table" then
+		local url = dep.url or dep[1]
+		if not url then
+			error("invalid dependency: " .. vim.inspect(dep))
+		end
+		return {
+			url = url,
+			name = url_to_name(url),
+		}
+	end
+
+	error("invalid dependency type: " .. vim.inspect(dep))
+end
+
+---@param entry RawPluginSpec
+---@return PluginSpec?
 local function normalize_plugin(entry)
 	if type(entry) ~= "table" then
 		return nil
@@ -33,7 +165,7 @@ local function normalize_plugin(entry)
 		local deps = {}
 
 		for _, dep in ipairs(plugin.dependencies) do
-			table.insert(deps, { url = dep, name = url_to_name(dep) })
+			table.insert(deps, normalize_dep(dep))
 		end
 
 		plugin.dependencies = deps
@@ -42,6 +174,8 @@ local function normalize_plugin(entry)
 	return plugin
 end
 
+---@param entries PluginSpec[]
+---@param out PluginSpec
 local function flatten(entries, out)
 	for _, entry in ipairs(entries) do
 		if type(entry) == "table" then
@@ -58,14 +192,16 @@ local function flatten(entries, out)
 	end
 end
 
+---@param entries RawPluginSpec|RawPluginSpec[]
+---@return PluginSpec[]
 local function normalize_all(entries)
 	local flat_plugins = {}
 
-	-- If the input 'entries' is itself a single plugin definition table
-	-- (e.g., return { "url", setup = ... }), and not a list of plugin definitions.
-	-- Check if it has a 'url' field directly or looks like a definition.
-	-- The type(entries[1]) == "string" check is crucial for { "url_string" } format.
-	if type(entries) == "table" and (entries.url or type(entries[1]) == "string") and not (type(entries[1]) == "table") then
+	if
+		type(entries) == "table"
+		and (entries.url or type(entries[1]) == "string")
+		and not (type(entries[1]) == "table")
+	then
 		local plugin = normalize_plugin(entries)
 		if plugin then
 			table.insert(flat_plugins, plugin)
@@ -73,8 +209,6 @@ local function normalize_all(entries)
 		return flat_plugins
 	end
 
-	-- Otherwise, treat 'entries' as a list (possibly nested) of plugin definitions.
-	-- This is the existing flatten logic.
 	flatten(entries, flat_plugins)
 
 	local out = {}
@@ -87,8 +221,11 @@ local function normalize_all(entries)
 	return out
 end
 
+---@param module string
+---@return PluginSpec[]
 local function load_spec_file(module)
 	local ok, spec = pcall(require, module)
+
 	if not ok or not spec then
 		return {}
 	end
@@ -96,18 +233,16 @@ local function load_spec_file(module)
 	return normalize_all(spec)
 end
 
+---@return PluginSpec[]
 function M.get()
-	local all_plugin_entries = {} -- Will store all unique {url, name} entries
-	local seen_names = {}
-	local seen_urls = {}
+	local map = {}
 
 	local plugin_dir = vim.fn.stdpath("config") .. "/lua/plugins"
-
 	local uv = vim.loop
 	local handle = uv.fs_scandir(plugin_dir)
 
 	if not handle then
-		return all_plugin_entries
+		return {}
 	end
 
 	while true do
@@ -121,32 +256,21 @@ function M.get()
 			local specs_from_file = load_spec_file(module) -- Returns a list of normalized plugins
 
 			for _, p in ipairs(specs_from_file) do
-				if not seen_urls[p.url] then
-					seen_urls[p.url] = true
-					seen_names[p.name] = true
-					table.insert(all_plugin_entries, p)
-
-					-- Also process dependencies of this top-level plugin
-					if p.dependencies then
-						for _, dep_entry in ipairs(p.dependencies) do
-							if not seen_urls[dep_entry.url] then
-								seen_urls[dep_entry.url] = true
-								if not seen_names[dep_entry.name] then
-									seen_names[dep_entry.name] = true
-									-- Add the dependency as a separate plugin entry
-									table.insert(all_plugin_entries, { url = dep_entry.url, name = dep_entry.name })
-								end
-							end
-						end
-					end
+				if not map[p.name] then
+					map[p.name] = p
+				else
+					map[p.name] = merge_plugin(map[p.name], p)
 				end
 			end
 		end
 	end
 
-	-- After collecting all entries, we might need to re-normalize them or ensure they are properly structured.
-	-- For now, this will return a flat list of all unique plugins (main + dependencies).
-	return all_plugin_entries
+	local results = {}
+	for _, p in pairs(map) do
+		table.insert(results, p)
+	end
+
+	return results
 end
 
 return M
