@@ -44,27 +44,46 @@ end
 
 local function flatten(entries, out)
 	for _, entry in ipairs(entries) do
-		if type(entry) == "table" and type(entry[1]) == "table" then
-			flatten(entry, out)
-		else
-			table.insert(out, entry)
+		if type(entry) == "table" then
+			-- If the entry is a table, and its first element is also a table,
+			-- it implies it's a nested list of plugins that needs further flattening.
+			if type(entry[1]) == "table" then
+				flatten(entry, out)
+			else
+				-- Otherwise, this entry itself is a plugin definition (a table containing string/other keys)
+				table.insert(out, entry)
+			end
 		end
+		-- If entry is not a table, it's ignored. This is correct as normalize_plugin expects a table.
 	end
 end
 
 local function normalize_all(entries)
-	local flat = {}
+	local flat_plugins = {}
+
+	-- If the input 'entries' is itself a single plugin definition table
+	-- (e.g., return { "url", setup = ... }), and not a list of plugin definitions.
+	-- Check if it has a 'url' field directly or looks like a definition.
+	-- The type(entries[1]) == "string" check is crucial for { "url_string" } format.
+	if type(entries) == "table" and (entries.url or type(entries[1]) == "string") and not (type(entries[1]) == "table") then
+		local plugin = normalize_plugin(entries)
+		if plugin then
+			table.insert(flat_plugins, plugin)
+		end
+		return flat_plugins
+	end
+
+	-- Otherwise, treat 'entries' as a list (possibly nested) of plugin definitions.
+	-- This is the existing flatten logic.
+	flatten(entries, flat_plugins)
+
 	local out = {}
-
-	flatten(entries, flat)
-
-	for _, entry in ipairs(flat) do
+	for _, entry in ipairs(flat_plugins) do
 		local plugin = normalize_plugin(entry)
 		if plugin then
 			table.insert(out, plugin)
 		end
 	end
-
 	return out
 end
 

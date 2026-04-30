@@ -27,6 +27,7 @@ local function _load_plugin_actual(plugin)
 
 	if not ok then
 		vim.notify("[loader] failed to setup: " .. plugin.name .. "\n" .. err, vim.log.levels.ERROR)
+		-- print("DEBUG: LUALINE SETUP FAILED for " .. plugin.name .. ": " .. err) -- ADD THIS DEBUG LINE
 		return false
 	end
 
@@ -111,6 +112,7 @@ end
 -- ╰─────────────────────────────────────────────────────────╯
 function M.setup()
 	local plugins = specs.get()
+	-- print("DEBUG: Plugins returned by specs.get(): " .. vim.inspect(plugins))
 	local plugin_map = {}
 	local loading_stack = {} -- Track plugins currently being processed for circular deps
 
